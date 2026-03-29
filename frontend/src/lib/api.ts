@@ -134,6 +134,8 @@ export const dashboardApi = {
     request<{ company_count: number; news_count: number; unread_alerts: number; job_count: number }>(
       "/api/v1/dashboard/stats"
     ),
+  newsDigest: () =>
+    request<Record<string, unknown>>("/api/v1/dashboard/news-digest"),
   news: (params?: { company_id?: number; limit?: number }) => {
     const query = new URLSearchParams();
     if (params?.company_id) query.set("company_id", String(params.company_id));

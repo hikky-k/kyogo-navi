@@ -68,6 +68,105 @@ def get_latest_news(
     ]
 
 
+@router.get("/news-digest")
+def get_news_digest(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """最新ニュースダイジェスト（企業別・影響度別に整理）"""
+    cached = cache_get("dashboard:news_digest")
+    if cached:
+        return cached
+
+    articles = db.query(NewsArticle).order_by(NewsArticle.created_at.desc()).limit(50).all()
+
+    # 企業別にグルーピング
+    by_company: dict[int, list] = {}
+    for a in articles:
+        if a.company_id not in by_company:
+            by_company[a.company_id] = []
+        by_company[a.company_id].append(a)
+
+    company_digests = []
+    for cid, company_articles in by_company.items():
+        company_name = db.query(Company.name).filter(Company.id == cid).scalar() or "不明"
+
+        # 影響度別に分類
+        high_impact = []
+        mid_impact = []
+        other = []
+
+        for a in company_articles:
+            item = {
+                "id": a.id,
+                "title": a.title,
+                "summary": a.summary,
+                "impact_score": a.impact_score,
+                "tags": a.tags,
+                "source": a.source,
+                "published_at": a.published_at.isoformat() if a.published_at else None,
+            }
+            if a.impact_score == "高":
+                high_impact.append(item)
+            elif a.impact_score == "中":
+                mid_impact.append(item)
+            else:
+                other.append(item)
+
+        # 企業ごとのサマリー文を生成
+        total = len(company_articles)
+        high_count = len(high_impact)
+        mid_count = len(mid_impact)
+
+        summary_parts = [f"直近{total}件のニュース"]
+        if high_count > 0:
+            high_titles = [a["title"] for a in high_impact[:2]]
+            summary_parts.append(f"重要ニュース{high_count}件（{', '.join(high_titles)}）")
+        if mid_count > 0:
+            summary_parts.append(f"注目ニュース{mid_count}件")
+
+        # 採用担当者向けの注目ポイント
+        recruiter_highlights = []
+        for a in high_impact + mid_impact:
+            tags = a.get("tags") or []
+            if any(t in tags for t in ["採用動向", "組織変更"]):
+                recruiter_highlights.append(f"[{a['impact_score']}] {a['title']}")
+            elif a["impact_score"] == "高":
+                recruiter_highlights.append(f"[重要] {a['title']}")
+
+        company_digests.append({
+            "company_id": cid,
+            "company_name": company_name,
+            "total_count": total,
+            "summary": "。".join(summary_parts) + "。",
+            "high_impact": high_impact[:3],
+            "mid_impact": mid_impact[:3],
+            "other": other[:3],
+            "recruiter_highlights": recruiter_highlights[:5],
+        })
+
+    # 全体のハイライト（影響度「高」のもの）
+    all_high = []
+    for a in articles:
+        if a.impact_score == "高":
+            company_name = db.query(Company.name).filter(Company.id == a.company_id).scalar()
+            all_high.append({
+                "company_name": company_name,
+                "title": a.title,
+                "summary": a.summary,
+                "tags": a.tags,
+            })
+
+    result = {
+        "company_digests": company_digests,
+        "top_highlights": all_high[:5],
+        "total_articles": len(articles),
+    }
+
+    cache_set("dashboard:news_digest", result, ttl=120)
+    return result
+
+
 @router.get("/alerts")
 def get_alerts(
     severity: str | None = Query(None, description="高/中/低"),
