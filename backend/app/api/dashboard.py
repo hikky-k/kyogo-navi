@@ -1,4 +1,4 @@
-"""ダッシュボードAPI"""
+"""ダッシュボードAPI（Redisキャッシュ対応）"""
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.alert import Alert
 from app.models.company import Company
 from app.models.job_posting import JobPosting
+from app.services.cache import cache_get, cache_set
 from app.models.news_article import NewsArticle
 from app.models.review_score import ReviewScore
 from app.models.user import User
@@ -21,13 +22,19 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """ダッシュボード統計情報"""
-    return {
+    """ダッシュボード統計情報（60秒キャッシュ）"""
+    cached = cache_get("dashboard:stats")
+    if cached:
+        return cached
+
+    result = {
         "company_count": db.query(Company).filter(Company.is_active == True).count(),  # noqa: E712
         "news_count": db.query(NewsArticle).count(),
         "unread_alerts": db.query(Alert).filter(Alert.is_read == False).count(),  # noqa: E712
         "job_count": db.query(JobPosting).filter(JobPosting.is_active == True).count(),  # noqa: E712
     }
+    cache_set("dashboard:stats", result, ttl=60)
+    return result
 
 
 @router.get("/news")
